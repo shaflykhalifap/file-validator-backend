@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
-from pydantic import BaseModel
 from typing import Optional
 import tempfile
 from pathlib import Path
@@ -14,12 +13,8 @@ from app.validators.master import run_master_validation, validate_master_file
 router = APIRouter(prefix="/validate", tags=["Validation"])
 
 
-# ── Request model: support JSON dan form ──────────────────────
-class ValidateRequest(BaseModel):
-    filename: Optional[str] = None
-
-
 # ── Helpers ───────────────────────────────────────────────────
+
 def _build_response(results: list[dict]) -> dict:
     total_files = len(results)
     valid_files = sum(1 for r in results if r["valid"])
@@ -35,15 +30,13 @@ def _build_response(results: list[dict]) -> dict:
     }
 
 
-def _save_to_db(results: list[dict], file_type: str, validated_by: str, source: str):
+def _save_to_db(results, file_type, validated_by, source):
     for r in results:
         if r.get("file") is None:
             continue
         try:
             save_validation_result(
-                filename=r["file"],
-                file_type=file_type,
-                source=source,
+                filename=r["file"], file_type=file_type, source=source,
                 validated_by=validated_by,
                 status="valid" if r["valid"] else "invalid",
                 total_rows=r.get("total_rows", 0),
@@ -52,32 +45,65 @@ def _save_to_db(results: list[dict], file_type: str, validated_by: str, source: 
                 notes=f"Validasi via {'web' if '@' in validated_by else 'API Postman'}",
             )
         except Exception as e:
-            print(f"[DB WARNING] Gagal simpan log untuk {r['file']}: {e}")
+            print(f"[DB WARNING] {e}")
 
 
-async def _run_smart(validator_fn, run_fn, folder: str, filename: Optional[str]):
+async def _run_smart(file_type: str, folder: str, filename: Optional[str]) -> list[dict]:
     """
-    Auto-detect local vs remote mode.
-    - Local : baca file langsung dari disk
-    - Remote: fetch file via HTTP dari mdbgo.io
+    Auto-detect local vs remote.
+    file_type: 'price' | 'inventory' | 'master'
+    folder   : 'inbox' | 'error'
     """
+    validator_map = {
+        "price":     (validate_price_file,     run_price_validation),
+        "inventory": (validate_inventory_file,  run_inventory_validation),
+        "master":    (validate_master_file,     run_master_validation),
+    }
+    validator_fn, run_fn = validator_map[file_type]
+
+    # ── Local mode ──
     if settings.is_local_mode:
-        return run_fn(folder, filename)
+        base = settings.get_dir(file_type, folder)
+        if filename:
+            fp = base / filename
+            if not fp.exists():
+                return [{"file": filename, "folder": folder, "valid": False, "total_rows": 0,
+                         "errors": [{"row": None, "column": None,
+                                     "message": f"File '{filename}' tidak ditemukan."}]}]
+            result = validator_fn(fp)
+            result["file"] = filename
+            result["folder"] = folder
+            return [result]
+        else:
+            files = list(base.glob("*.txt"))
+            if not files:
+                return [{"file": None, "folder": folder, "valid": True, "total_rows": 0,
+                         "errors": [{"row": None, "column": None,
+                                     "message": f"Tidak ada file .txt di {file_type}/{folder}."}]}]
+            results = []
+            for fp in sorted(files):
+                r = validator_fn(fp)
+                r["file"] = fp.name
+                r["folder"] = folder
+                results.append(r)
+            return results
 
+    # ── Remote mode ──
     from app.core.remote_files import fetch_remote_file, list_remote_files
 
-    filenames_to_process = [filename] if filename else [
-        f["filename"] for f in list_remote_files(folder)
-    ]
+    if filename:
+        filenames = [filename]
+    else:
+        filenames = [f["filename"] for f in list_remote_files(file_type, folder)]
 
-    if not filenames_to_process:
+    if not filenames:
         return [{"file": None, "folder": folder, "valid": True, "total_rows": 0,
                  "errors": [{"row": None, "column": None,
-                             "message": f"Tidak ada file .txt di folder {folder}."}]}]
+                             "message": f"Tidak ada file .txt di {file_type}/{folder}."}]}]
 
     results = []
-    for fname in filenames_to_process:
-        tmp_path = fetch_remote_file(fname, folder)
+    for fname in filenames:
+        tmp_path = fetch_remote_file(fname, file_type, folder)
         try:
             result = validator_fn(tmp_path)
             result["file"] = fname
@@ -92,21 +118,14 @@ async def _run_smart(validator_fn, run_fn, folder: str, filename: Optional[str])
 #  PRICE
 # ══════════════════════════════════════════════════════════════
 @router.post("/inbox/price")
-async def validate_inbox_price(
-    filename: Optional[str] = Form(None),
-    user=Depends(get_current_user)
-):
-    results = await _run_smart(validate_price_file, run_price_validation, "inbox", filename or None)
+async def validate_inbox_price(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
+    results = await _run_smart("price", "inbox", filename or None)
     _save_to_db(results, "price", user["email"], "inbox")
     return _build_response(results)
 
-
 @router.post("/error/price")
-async def validate_error_price(
-    filename: Optional[str] = Form(None),
-    user=Depends(get_current_user)
-):
-    results = await _run_smart(validate_price_file, run_price_validation, "error", filename or None)
+async def validate_error_price(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
+    results = await _run_smart("price", "error", filename or None)
     _save_to_db(results, "price", user["email"], "error")
     return _build_response(results)
 
@@ -115,21 +134,14 @@ async def validate_error_price(
 #  INVENTORY
 # ══════════════════════════════════════════════════════════════
 @router.post("/inbox/inventory")
-async def validate_inbox_inventory(
-    filename: Optional[str] = Form(None),
-    user=Depends(get_current_user)
-):
-    results = await _run_smart(validate_inventory_file, run_inventory_validation, "inbox", filename or None)
+async def validate_inbox_inventory(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
+    results = await _run_smart("inventory", "inbox", filename or None)
     _save_to_db(results, "inventory", user["email"], "inbox")
     return _build_response(results)
 
-
 @router.post("/error/inventory")
-async def validate_error_inventory(
-    filename: Optional[str] = Form(None),
-    user=Depends(get_current_user)
-):
-    results = await _run_smart(validate_inventory_file, run_inventory_validation, "error", filename or None)
+async def validate_error_inventory(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
+    results = await _run_smart("inventory", "error", filename or None)
     _save_to_db(results, "inventory", user["email"], "error")
     return _build_response(results)
 
@@ -138,27 +150,20 @@ async def validate_error_inventory(
 #  MASTER PRODUCT
 # ══════════════════════════════════════════════════════════════
 @router.post("/inbox/master-product")
-async def validate_inbox_master(
-    filename: Optional[str] = Form(None),
-    user=Depends(get_current_user)
-):
-    results = await _run_smart(validate_master_file, run_master_validation, "inbox", filename or None)
+async def validate_inbox_master(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
+    results = await _run_smart("master", "inbox", filename or None)
     _save_to_db(results, "master", user["email"], "inbox")
     return _build_response(results)
 
-
 @router.post("/error/master-product")
-async def validate_error_master(
-    filename: Optional[str] = Form(None),
-    user=Depends(get_current_user)
-):
-    results = await _run_smart(validate_master_file, run_master_validation, "error", filename or None)
+async def validate_error_master(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
+    results = await _run_smart("master", "error", filename or None)
     _save_to_db(results, "master", user["email"], "error")
     return _build_response(results)
 
 
 # ══════════════════════════════════════════════════════════════
-#  UPLOAD & VALIDATE (Web drag-and-drop)
+#  UPLOAD & VALIDATE
 # ══════════════════════════════════════════════════════════════
 @router.post("/upload/price")
 async def upload_price(file: UploadFile = File(...), user=Depends(get_current_user)):
@@ -166,20 +171,17 @@ async def upload_price(file: UploadFile = File(...), user=Depends(get_current_us
     _save_to_db(result["results"], "price", user["email"], "upload")
     return result
 
-
 @router.post("/upload/inventory")
 async def upload_inventory(file: UploadFile = File(...), user=Depends(get_current_user)):
     result = await _handle_upload(file, validate_inventory_file)
     _save_to_db(result["results"], "inventory", user["email"], "upload")
     return result
 
-
 @router.post("/upload/master-product")
 async def upload_master(file: UploadFile = File(...), user=Depends(get_current_user)):
     result = await _handle_upload(file, validate_master_file)
     _save_to_db(result["results"], "master", user["email"], "upload")
     return result
-
 
 async def _handle_upload(file: UploadFile, validator_fn) -> dict:
     if not file.filename.endswith(".txt"):
@@ -200,47 +202,42 @@ async def _handle_upload(file: UploadFile, validator_fn) -> dict:
 # ══════════════════════════════════════════════════════════════
 #  LIST FILES
 # ══════════════════════════════════════════════════════════════
-@router.get("/files/{folder}")
-async def list_files(folder: str, _=Depends(get_current_user)):
+@router.get("/files/{file_type}/{folder}")
+async def list_files(file_type: str, folder: str, _=Depends(get_current_user)):
+    if file_type not in ("price", "inventory", "master"):
+        raise HTTPException(status_code=400, detail="file_type harus: price, inventory, atau master.")
     if folder not in ("inbox", "error"):
-        raise HTTPException(status_code=400, detail="Folder harus 'inbox' atau 'error'.")
+        raise HTTPException(status_code=400, detail="folder harus: inbox atau error.")
 
     if settings.is_local_mode:
-        base = settings.INBOX_DIR if folder == "inbox" else settings.ERROR_DIR
+        base = settings.get_dir(file_type, folder)
         files = sorted(base.glob("*.txt"))
-        result = [
-            {"filename": f.name, "size_kb": round(f.stat().st_size / 1024, 1), "modified": f.stat().st_mtime}
-            for f in files
-        ]
-        return {"folder": folder, "files": result, "count": len(result)}
+        return {"folder": folder, "file_type": file_type,
+                "files": [{"filename": f.name, "size_kb": round(f.stat().st_size/1024,1),
+                           "modified": f.stat().st_mtime} for f in files],
+                "count": len(files)}
 
     from app.core.remote_files import list_remote_files
-    files = list_remote_files(folder)
-    return {"folder": folder, "files": files, "count": len(files)}
+    files = list_remote_files(file_type, folder)
+    return {"folder": folder, "file_type": file_type, "files": files, "count": len(files)}
 
 
 # ══════════════════════════════════════════════════════════════
 #  LOGS & SUMMARY
 # ══════════════════════════════════════════════════════════════
 @router.get("/logs")
-async def get_logs(
-    file_type: Optional[str] = None,
-    source: Optional[str] = None,
-    status: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
-    _=Depends(get_current_user),
-):
+async def get_logs(file_type: Optional[str] = None, source: Optional[str] = None,
+                   status: Optional[str] = None, limit: int = 100, offset: int = 0,
+                   _=Depends(get_current_user)):
     try:
         logs = get_validation_logs(file_type, source, status, limit, offset)
         return {"logs": logs, "count": len(logs)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal mengambil log: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=f"Gagal ambil log: {str(e)}")
 
 @router.get("/summary")
 async def get_summary(_=Depends(get_current_user)):
     try:
         return get_validation_summary()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal mengambil summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal ambil summary: {str(e)}")
