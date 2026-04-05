@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     DB_USER: str = "sufelin_sufelin"
     DB_PASS: str = "Sufelin76*"
     DB_NAME: str = "sufelin_dbkampus"
+    DB_PORT: int = 3306
 
     # ── URL server mdbgo.io ───────────────────────────────
     REMOTE_BASE_URL: str = "http://project_java.mdbgo.io"
