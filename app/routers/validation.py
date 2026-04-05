@@ -151,28 +151,61 @@ async def get_summary(_=Depends(get_current_user)):
 @router.get("/files/{folder}")
 async def list_files(folder: str, _=Depends(get_current_user)):
     """
-    Ambil daftar file .txt yang ada di folder inbox atau error.
-    folder: 'inbox' atau 'error'
+    Ambil daftar file .txt di folder inbox atau error.
+    - Local mode: baca langsung dari disk (jika folder ada)
+    - Remote mode: fetch via PHP API di mdbgo.io
     """
     if folder not in ("inbox", "error"):
         raise HTTPException(status_code=400, detail="Folder harus 'inbox' atau 'error'.")
 
-    base = settings.INBOX_DIR if folder == "inbox" else settings.ERROR_DIR
+    # ── Local mode ──
+    if settings.is_local_mode:
+        base = settings.INBOX_DIR if folder == "inbox" else settings.ERROR_DIR
+        files = sorted(base.glob("*.txt"))
+        result = [
+            {"filename": f.name, "size_kb": round(f.stat().st_size / 1024, 1), "modified": f.stat().st_mtime}
+            for f in files
+        ]
+        return {"folder": folder, "files": result, "count": len(result)}
 
-    if not base.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Folder '{folder}' tidak ditemukan di path: {base}"
-        )
+    # ── Remote mode (Railway → mdbgo.io) ──
+    from app.core.remote_files import list_remote_files
+    files = list_remote_files(folder)
+    return {"folder": folder, "files": files, "count": len(files)}
 
-    files = sorted(base.glob("*.txt"))
-    result = []
-    for f in files:
-        stat = f.stat()
-        result.append({
-            "filename": f.name,
-            "size_kb": round(stat.st_size / 1024, 1),
-            "modified": stat.st_mtime,
-        })
 
-    return {"folder": folder, "path": str(base), "files": result, "count": len(result)}
+# ── Helper: jalankan validasi dengan auto-detect local/remote ──
+async def _run_validation_smart(validator_fn, run_fn, folder: str, filename: str | None):
+    """
+    Jika local mode: pakai run_fn (baca langsung dari disk).
+    Jika remote mode: fetch file via HTTP lalu validasi satu per satu.
+    """
+    if settings.is_local_mode:
+        return run_fn(folder, filename)
+
+    # Remote mode
+    from app.core.remote_files import fetch_remote_file, list_remote_files
+    results = []
+
+    if filename:
+        filenames = [filename]
+    else:
+        files = list_remote_files(folder)
+        filenames = [f["filename"] for f in files]
+
+    if not filenames:
+        return [{"file": None, "folder": folder, "valid": True, "total_rows": 0,
+                 "errors": [{"row": None, "column": None,
+                             "message": f"Tidak ada file .txt di folder {folder}."}]}]
+
+    for fname in filenames:
+        tmp_path = fetch_remote_file(fname, folder)
+        try:
+            result = validator_fn(tmp_path)
+            result["file"] = fname
+            result["folder"] = folder
+            results.append(result)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    return results
