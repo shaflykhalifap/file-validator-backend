@@ -11,13 +11,8 @@ app = FastAPI(
 # CORS — izinkan React dev server dan production domain
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://project_java.mdbgo.io",
-        "https://web-production-4e48d5.up.railway.app",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
