@@ -1,0 +1,16 @@
+# ── JWT ──────────────────────────────────────────────────────
+SECRET_KEY=changeme-gunakan-string-random-panjang-di-production
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=480
+
+# ── Database MySQL ────────────────────────────────────────────
+DB_HOST=mysql.db.mdbgo.com
+DB_USER=sufelin_sufelin
+DB_PASS=Sufelin76*
+DB_NAME=sufelin_dbkampus
+
+# ── Folder paths di server mdbgo.io ──────────────────────────
+# Sesuaikan path absolut ini dengan struktur folder di server Anda
+# Cek via FileZilla: klik kanan folder inbox → "Copy URL" atau lihat path di panel kiri
+INBOX_DIR=sftp://Sufelin@ftp.mdbgo.com:2222/project_java/inbox
+ERROR_DIR=sftp://Sufelin@ftp.mdbgo.com:2222/project_java/error
