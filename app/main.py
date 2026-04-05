@@ -15,7 +15,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:3000",
         "http://project_java.mdbgo.io",
-        "http://project_java.mdbgo.io:8000",
+        "https://web-production-4e48d5.up.railway.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
