@@ -1,18 +1,19 @@
-from fastapi import APIRouter, HTTPException, status, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, status, Depends, Form
 from app.core.auth import authenticate_user, create_access_token, get_current_user, update_last_login
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
 @router.post("/login")
-async def login(body: LoginRequest):
-    user = authenticate_user(body.email, body.password)
+async def login(
+    email: str = Form(..., description="Email akun"),
+    password: str = Form(..., description="Password akun"),
+):
+    """
+    Login dan dapatkan JWT token.
+    Gunakan x-www-form-urlencoded di Postman.
+    """
+    user = authenticate_user(email, password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
