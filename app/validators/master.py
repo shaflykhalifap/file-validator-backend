@@ -126,18 +126,48 @@ def validate_master_file(filepath: Path) -> dict:
 
         cols = line.split("\t")
 
-        if len(cols) != 16:
+        # Fleksibel: terima 14, 15, atau 16 kolom
+        # 14 = hanya kolom consumed (normal jika 2 terakhir dikosongkan tanpa tab)
+        # 15 = kolom ke-15 ada isi (DISCONTINUATION terisi)
+        # 16 = semua kolom ada (normal atau ke-15/16 ada isi)
+        if len(cols) < 14:
             found_vals = " | ".join(f"'{c}'" for c in cols[:5])
             errors.append({
                 "row": row_num, "column": None,
                 "message": (
                     f"Jumlah kolom tidak sesuai pada baris {row_num}. "
-                    f"Ditemukan {len(cols)} kolom, seharusnya 16. "
+                    f"Ditemukan {len(cols)} kolom, seharusnya minimal 14 kolom. "
                     f"5 nilai pertama: {found_vals}. "
                     f"Kemungkinan: ada kolom yang hilang atau pemisah bukan Tab."
                 )
             })
             continue
+
+        # Pad ke 16 kolom jika kurang (kolom kosong di akhir)
+        while len(cols) < 16:
+            cols.append("")
+
+        # Cek kolom ke-15 dan ke-16 (DISCONTINUATION & CONCEPT) harus kosong
+        disc_val = cols[14].strip()  # kolom 15 (index 14)
+        conc_val = cols[15].strip()  # kolom 16 (index 15)
+
+        if disc_val:
+            errors.append({
+                "row": row_num, "column": "DISCONTINUATION",
+                "message": (
+                    f"Kolom 'DISCONTINUATION' (kolom ke-15) seharusnya kosong karena tidak di-consume sistem. "
+                    f"Ditemukan nilai: '{disc_val}'. Hapus isi kolom ini."
+                )
+            })
+
+        if conc_val:
+            errors.append({
+                "row": row_num, "column": "CONCEPT",
+                "message": (
+                    f"Kolom 'CONCEPT' (kolom ke-16) seharusnya kosong karena tidak di-consume sistem. "
+                    f"Ditemukan nilai: '{conc_val}'. Hapus isi kolom ini."
+                )
+            })
 
         col_map = {MASTER_HEADERS[i]: cols[i] for i in range(16)}
 
@@ -150,18 +180,6 @@ def validate_master_file(filepath: Path) -> dict:
             if val != val.lstrip():
                 errors.append({"row": row_num, "column": col_name,
                                 "message": f"Terdapat spasi di awal cell. Nilai: '{val}'"})
-
-        # Cek 2 kolom terakhir harus KOSONG (DISCONTINUATION & CONCEPT)
-        for col_name in MASTER_HEADERS[CONSUMED_COLUMNS:]:
-            val = col_map[col_name].strip()
-            if val:
-                errors.append({
-                    "row": row_num, "column": col_name,
-                    "message": (
-                        f"Kolom '{col_name}' seharusnya kosong (tidak di-consume sistem). "
-                        f"Ditemukan nilai: '{val}'. Hapus isi kolom ini."
-                    )
-                })
 
         # Cek SKU mengandung SPU
         spu = col_map["PARENT/GENERIC/SPU"].strip()

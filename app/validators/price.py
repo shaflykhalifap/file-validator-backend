@@ -12,14 +12,17 @@ PRICE_HEADERS = [
 
 # ── Helper: analisis perbedaan header per kolom ──────────────
 
+def _normalize_spaces(s: str) -> str:
+    import re as _re
+    return _re.sub(r' +', ' ', s.strip())
+
+
 def _analyze_header_errors(found: list[str], expected: list[str], row: int) -> list[dict]:
     """
-    Bandingkan header kolom per kolom dan hasilkan pesan error yang spesifik.
-    Menangani: jumlah kolom beda, nama salah, pemisah bukan tab.
+    Bandingkan header kolom per kolom — deteksi nama salah, spasi berlebih/kurang, dll.
     """
     errors = []
 
-    # Cek jumlah kolom
     if len(found) != len(expected):
         errors.append({
             "row": row, "column": None,
@@ -29,39 +32,39 @@ def _analyze_header_errors(found: list[str], expected: list[str], row: int) -> l
                 f"Kemungkinan penyebab: ada kolom yang hilang, atau pemisah header bukan Tab."
             )
         })
-        # Tetap cek kolom yang ada
         check_count = min(len(found), len(expected))
     else:
         check_count = len(expected)
 
-    # Cek nama per kolom
     for i in range(check_count):
         f = found[i]
         e = expected[i]
         f_stripped = f.strip()
 
         if f_stripped == e:
-            # Nama benar, cek spasi
             if f != f_stripped:
                 errors.append({
                     "row": row, "column": f"Kolom {i+1}",
-                    "message": f"Header kolom {i+1} ('{e}') mengandung spasi di awal atau akhir."
+                    "message": f"Header kolom {i+1} (\'{e}\') mengandung spasi di awal atau akhir."
                 })
         else:
-            # Nama salah — beri pesan spesifik
-            if f_stripped.replace(" ", "") == e.replace(" ", ""):
-                # Konten sama tapi spasi beda (kemungkinan tab vs spasi)
+            f_norm = _normalize_spaces(f_stripped)
+            e_norm = _normalize_spaces(e)
+
+            if f_norm == e_norm:
+                # Nama sama setelah normalisasi → masalah jumlah spasi dalam nama
                 errors.append({
                     "row": row, "column": f"Kolom {i+1}",
                     "message": (
-                        f"Header kolom {i+1} menggunakan spasi alih-alih Tab sebagai pemisah. "
-                        f"Ditemukan: '{f}' | Seharusnya: '{e}'"
+                        f"Nama header kolom {i+1} memiliki spasi yang tidak tepat. "
+                        f"Ditemukan: \'{f_stripped}\' | Seharusnya: \'{e}\' "
+                        f"(periksa jumlah spasi antar kata, termasuk di sekitar karakter \'/')"
                     )
                 })
             else:
                 errors.append({
                     "row": row, "column": f"Kolom {i+1}",
-                    "message": f"Nama header kolom {i+1} salah. Ditemukan: '{f_stripped}' | Seharusnya: '{e}'"
+                    "message": f"Nama header kolom {i+1} salah. Ditemukan: \'{f_stripped}\' | Seharusnya: \'{e}\'"
                 })
 
     return errors
