@@ -8,7 +8,59 @@ MASTER_HEADERS = [
     "YEAR", "SEASON", "CATEGORY", "SBU CODE", "LEGAL ENTITY CODE",
     "MAIN UPC", "DISCONTINUATION", "CONCEPT",
 ]
-CONSUMED_COLUMNS = 14  # hanya 14 kolom yang di-consume sistem
+CONSUMED_COLUMNS = 14
+
+
+def _analyze_header_errors(found: list[str], expected: list[str], row: int) -> list[dict]:
+    errors = []
+    if len(found) != len(expected):
+        errors.append({
+            "row": row, "column": None,
+            "message": (
+                f"Jumlah kolom header tidak sesuai. "
+                f"Ditemukan {len(found)} kolom, seharusnya {len(expected)} kolom. "
+                f"Kemungkinan: ada kolom yang hilang, atau pemisah header bukan Tab."
+            )
+        })
+    check_count = min(len(found), len(expected))
+    for i in range(check_count):
+        f = found[i]
+        e = expected[i]
+        f_stripped = f.strip()
+        if f_stripped == e:
+            if f != f_stripped:
+                errors.append({"row": row, "column": f"Kolom {i+1} ({e})",
+                                "message": f"Header kolom {i+1} ('{e}') mengandung spasi di awal atau akhir."})
+        else:
+            # Cek apakah masalah spasi di sekitar '/'
+            if '/' in e:
+                e_no_space = e.replace(' / ', '/').replace('/ ', '/').replace(' /', '/')
+                f_no_space = f_stripped.replace(' / ', '/').replace('/ ', '/').replace(' /', '/')
+                if f_no_space == e_no_space:
+                    errors.append({
+                        "row": row, "column": f"Kolom {i+1}",
+                        "message": (
+                            f"Header kolom {i+1} memiliki masalah spasi di sekitar karakter '/'. "
+                            f"Ditemukan: '{f_stripped}' | Seharusnya: '{e}' "
+                            f"(perhatikan tidak boleh ada spasi di sekitar '/' pada nama kolom ini)"
+                        )
+                    })
+                    continue
+            # Cek apakah seharusnya tidak ada '/' tapi ada spasi
+            if '/' not in e and f_stripped.replace(' ', '') == e.replace(' ', ''):
+                errors.append({
+                    "row": row, "column": f"Kolom {i+1}",
+                    "message": (
+                        f"Header kolom {i+1} menggunakan spasi alih-alih Tab sebagai pemisah. "
+                        f"Ditemukan: '{f_stripped}' | Seharusnya: '{e}'"
+                    )
+                })
+                continue
+            errors.append({
+                "row": row, "column": f"Kolom {i+1}",
+                "message": f"Nama header kolom {i+1} salah. Ditemukan: '{f_stripped}' | Seharusnya: '{e}'"
+            })
+    return errors
 
 
 def validate_master_file(filepath: Path) -> dict:
@@ -30,28 +82,28 @@ def validate_master_file(filepath: Path) -> dict:
         return {"valid": False, "total_rows": 0,
                 "errors": [{"row": None, "column": None, "message": "File kosong."}]}
 
-    # 2. Validasi header
+    # 2. Validasi header — TIDAK berhenti meski salah
     header_line = lines[0]
-    headers = header_line.split("\t")
+
+    if "\t" not in header_line and len(MASTER_HEADERS) > 1:
+        errors.append({"row": 1, "column": None,
+                        "message": "Pemisah antar kolom pada baris header bukan Tab."})
+        headers = [h.strip() for h in header_line.split("  ") if h.strip()]
+    else:
+        headers = header_line.split("\t")
+
     headers_stripped = [h.strip() for h in headers]
 
     if headers_stripped != MASTER_HEADERS:
-        errors.append({
-            "row": 1, "column": None,
-            "message": f"Header tidak sesuai.\nDitemukan : {headers_stripped}\nSeharusnya: {MASTER_HEADERS}"
-        })
-        return {"valid": False, "total_rows": len(lines) - 1, "errors": errors}
+        header_errors = _analyze_header_errors(headers, MASTER_HEADERS, 1)
+        errors.extend(header_errors)
+    else:
+        for i, h in enumerate(headers):
+            if h != h.strip():
+                errors.append({"row": 1, "column": MASTER_HEADERS[i],
+                                "message": f"Header kolom '{MASTER_HEADERS[i]}' mengandung spasi di awal atau akhir."})
 
-    if len(headers) != 16:
-        errors.append({"row": 1, "column": None,
-                        "message": f"Jumlah header harus 16. Ditemukan: {len(headers)}"})
-
-    for i, h in enumerate(headers):
-        if h != h.strip():
-            errors.append({"row": 1, "column": MASTER_HEADERS[i] if i < len(MASTER_HEADERS) else f"Kolom {i+1}",
-                            "message": f"Header '{h}' mengandung spasi di awal atau akhir."})
-
-    # 3. Validasi baris data
+    # 3. Validasi isi — SELALU dijalankan
     data_lines = lines[1:]
     for line_idx, line in enumerate(data_lines):
         row_num = line_idx + 2
@@ -63,20 +115,33 @@ def validate_master_file(filepath: Path) -> dict:
             continue
 
         if "\t" not in line:
-            errors.append({"row": row_num, "column": None,
-                            "message": "Pemisah kolom bukan Tab pada baris ini."})
+            errors.append({
+                "row": row_num, "column": None,
+                "message": (
+                    f"Baris {row_num} tidak menggunakan Tab sebagai pemisah kolom. "
+                    f"Periksa pemisah antara setiap nilai."
+                )
+            })
             continue
 
         cols = line.split("\t")
 
         if len(cols) != 16:
-            errors.append({"row": row_num, "column": None,
-                            "message": f"Jumlah kolom tidak sesuai. Ditemukan {len(cols)}, seharusnya 16."})
+            found_vals = " | ".join(f"'{c}'" for c in cols[:5])
+            errors.append({
+                "row": row_num, "column": None,
+                "message": (
+                    f"Jumlah kolom tidak sesuai pada baris {row_num}. "
+                    f"Ditemukan {len(cols)} kolom, seharusnya 16. "
+                    f"5 nilai pertama: {found_vals}. "
+                    f"Kemungkinan: ada kolom yang hilang atau pemisah bukan Tab."
+                )
+            })
             continue
 
         col_map = {MASTER_HEADERS[i]: cols[i] for i in range(16)}
 
-        # Cek trailing/leading spasi untuk 14 kolom yang di-consume
+        # Cek trailing/leading spasi untuk 14 kolom consumed
         for col_name in MASTER_HEADERS[:CONSUMED_COLUMNS]:
             val = col_map[col_name]
             if val != val.rstrip():
@@ -86,21 +151,39 @@ def validate_master_file(filepath: Path) -> dict:
                 errors.append({"row": row_num, "column": col_name,
                                 "message": f"Terdapat spasi di awal cell. Nilai: '{val}'"})
 
-        # Cek SKU harus mengandung SPU
+        # Cek 2 kolom terakhir harus KOSONG (DISCONTINUATION & CONCEPT)
+        for col_name in MASTER_HEADERS[CONSUMED_COLUMNS:]:
+            val = col_map[col_name].strip()
+            if val:
+                errors.append({
+                    "row": row_num, "column": col_name,
+                    "message": (
+                        f"Kolom '{col_name}' seharusnya kosong (tidak di-consume sistem). "
+                        f"Ditemukan nilai: '{val}'. Hapus isi kolom ini."
+                    )
+                })
+
+        # Cek SKU mengandung SPU
         spu = col_map["PARENT/GENERIC/SPU"].strip()
         sku = col_map["ARTICLE NUMBER/VARIANT/SKU"].strip()
         if spu and sku and spu not in sku:
             errors.append({"row": row_num, "column": "ARTICLE NUMBER/VARIANT/SKU",
-                            "message": f"SKU harus mengandung nilai SPU. SPU: '{spu}' | SKU: '{sku}'"})
+                            "message": (
+                                f"Nilai SKU harus mengandung nilai SPU. "
+                                f"SPU: '{spu}' | SKU: '{sku}' — '{spu}' tidak ditemukan di dalam '{sku}'"
+                            )})
 
         # Cek UPC == MAIN UPC
         upc = col_map["UPC"].strip()
         main_upc = col_map["MAIN UPC"].strip()
         if upc != main_upc:
             errors.append({"row": row_num, "column": "MAIN UPC",
-                            "message": f"UPC dan MAIN UPC harus sama. UPC: '{upc}' | MAIN UPC: '{main_upc}'"})
+                            "message": (
+                                f"Nilai UPC dan MAIN UPC harus identik. "
+                                f"UPC: '{upc}' | MAIN UPC: '{main_upc}'"
+                            )})
 
-        # Cek LEGAL ENTITY CODE: 4 digit angka
+        # Cek LEGAL ENTITY CODE
         legal = col_map["LEGAL ENTITY CODE"].strip()
         if not (legal.isdigit() and len(legal) == 4):
             errors.append({"row": row_num, "column": "LEGAL ENTITY CODE",
@@ -109,10 +192,10 @@ def validate_master_file(filepath: Path) -> dict:
         # Cek UPC tidak kosong
         if not upc:
             errors.append({"row": row_num, "column": "UPC",
-                            "message": "UPC tidak boleh kosong."})
+                            "message": "Kolom UPC tidak boleh kosong."})
 
-        # Cek kolom wajib lainnya tidak kosong (14 kolom consumed, kecuali DISCONTINUATION & CONCEPT)
-        required_cols = MASTER_HEADERS[:CONSUMED_COLUMNS - 2]  # exclude DISCONTINUATION & CONCEPT
+        # Cek kolom wajib tidak kosong (12 kolom pertama)
+        required_cols = MASTER_HEADERS[:12]
         for col_name in required_cols:
             if not col_map[col_name].strip():
                 errors.append({"row": row_num, "column": col_name,
@@ -124,7 +207,6 @@ def validate_master_file(filepath: Path) -> dict:
 def run_master_validation(folder: str, filename: Optional[str] = None) -> list[dict]:
     base = settings.INBOX_DIR if folder == "inbox" else settings.ERROR_DIR
     results = []
-
     if filename:
         fp = base / filename
         if not fp.exists():
@@ -141,10 +223,9 @@ def run_master_validation(folder: str, filename: Optional[str] = None) -> list[d
             return [{"file": None, "valid": True, "total_rows": 0, "folder": folder,
                      "errors": [{"row": None, "column": None,
                                  "message": f"Tidak ada file .txt di folder {folder}."}]}]
-        for fp in files:
+        for fp in sorted(files):
             result = validate_master_file(fp)
             result["file"] = fp.name
             result["folder"] = folder
             results.append(result)
-
     return results
