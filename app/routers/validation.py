@@ -226,18 +226,30 @@ async def list_files(file_type: str, folder: str, _=Depends(get_current_user)):
 #  LOGS & SUMMARY
 # ══════════════════════════════════════════════════════════════
 @router.get("/logs")
-async def get_logs(file_type: Optional[str] = None, source: Optional[str] = None,
-                   status: Optional[str] = None, limit: int = 100, offset: int = 0,
-                   _=Depends(get_current_user)):
+async def get_logs(
+    file_type: Optional[str] = None,
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    _=Depends(get_current_user),
+):
+    """Ambil riwayat log validasi. Mengembalikan list kosong jika DB tidak tersedia."""
     try:
         logs = get_validation_logs(file_type, source, status, limit, offset)
-        return {"logs": logs, "count": len(logs)}
+        return {"logs": logs or [], "count": len(logs or [])}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal ambil log: {str(e)}")
+        print(f"[LOGS ERROR] {e}")
+        # Kembalikan list kosong agar frontend tidak crash
+        return {"logs": [], "count": 0, "warning": "Database tidak tersedia saat ini."}
+
 
 @router.get("/summary")
 async def get_summary(_=Depends(get_current_user)):
     try:
-        return get_validation_summary()
+        result = get_validation_summary()
+        return result or {"overall": {}, "by_type": [], "recent": []}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal ambil summary: {str(e)}")
+        print(f"[SUMMARY ERROR] {e}")
+        return {"overall": {}, "by_type": [], "recent": []}
+
