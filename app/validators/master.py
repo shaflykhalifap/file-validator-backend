@@ -219,7 +219,7 @@ def validate_master_file(filepath: Path) -> dict:
                 errors.append({"row": row_num, "column": col_name,
                                 "message": f"Kolom '{col_name}' tidak boleh kosong."})
 
-    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors}
+    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors, "raw_lines": lines}
 
 
 def run_master_validation(folder: str, filename: Optional[str] = None) -> list[dict]:

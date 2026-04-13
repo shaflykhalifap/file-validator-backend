@@ -185,7 +185,7 @@ def validate_price_file(filepath: Path) -> dict:
                     errors.append({"row": row_num, "column": col_name,
                                     "message": f"{col_name} bukan angka valid. Nilai: '{v}'"})
 
-    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors}
+    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors, "raw_lines": lines}
 
 
 def run_price_validation(folder: str, filename: Optional[str] = None) -> list[dict]:

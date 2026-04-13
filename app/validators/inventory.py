@@ -166,7 +166,7 @@ def validate_inventory_file(filepath: Path) -> dict:
             errors.append({"row": row_num, "column": "BalanceApproved",
                             "message": f"BalanceApproved harus berupa angka bulat. Nilai: '{bal_clean}'"})
 
-    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors}
+    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors, "raw_lines": lines}
 
 
 def run_inventory_validation(folder: str, filename: Optional[str] = None) -> list[dict]:
