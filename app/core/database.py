@@ -1,6 +1,5 @@
 """
-Database connection ke MySQL mdbgo.com.
-Menggunakan koneksi langsung (bukan pool) untuk kompatibilitas Railway.
+Database connection ke MySQL.
 """
 import json
 import mysql.connector
@@ -9,10 +8,6 @@ from app.core.config import settings
 
 
 def get_connection():
-    """
-    Buat koneksi baru ke MySQL.
-    Koneksi dibuat fresh setiap kali — lebih reliable untuk remote DB.
-    """
     return mysql.connector.connect(
         host=settings.DB_HOST,
         port=settings.DB_PORT,
@@ -28,7 +23,6 @@ def get_connection():
 
 
 def _safe_query(fn):
-    """Jalankan query dengan koneksi baru, return None jika gagal."""
     try:
         conn = get_connection()
         try:
@@ -40,8 +34,6 @@ def _safe_query(fn):
         return None
 
 
-# ── CRUD helpers ──────────────────────────────────────────────
-
 def save_validation_result(
     filename: str,
     file_type: str,
@@ -52,19 +44,22 @@ def save_validation_result(
     total_errors: int,
     error_details: list,
     notes: str = None,
+    raw_lines: list = None,      # ← baru: baris asli file
 ) -> int:
     def _fn(conn):
         cursor = conn.cursor()
+        raw_lines_json = json.dumps(raw_lines, ensure_ascii=False) if raw_lines else None
         cursor.execute(
             """
             INSERT INTO file_validations
                 (filename, file_type, source, validated_by, validated_at,
-                 status, total_rows, total_errors, error_details, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 status, total_rows, total_errors, error_details, notes, raw_lines)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (filename, file_type, source, validated_by, datetime.now(),
              status, total_rows, total_errors,
-             json.dumps(error_details, ensure_ascii=False), notes)
+             json.dumps(error_details, ensure_ascii=False), notes,
+             raw_lines_json)
         )
         new_id = cursor.lastrowid
         cursor.close()
@@ -101,6 +96,12 @@ def get_validation_logs(
                     row["error_details"] = json.loads(row["error_details"])
                 except Exception:
                     row["error_details"] = []
+            # Parse raw_lines
+            if row.get("raw_lines"):
+                try:
+                    row["raw_lines"] = json.loads(row["raw_lines"])
+                except Exception:
+                    row["raw_lines"] = None
             for key in ("validated_at", "created_at"):
                 if isinstance(row.get(key), datetime):
                     row[key] = row[key].isoformat()
