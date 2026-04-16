@@ -43,17 +43,13 @@ def _save_to_db(results, file_type, validated_by, source, via="web"):
                 total_errors=len(r.get("errors", [])),
                 error_details=r.get("errors", []),
                 notes=f"Validasi via {via}",
+                raw_lines=r.get("raw_lines"),   # simpan raw_lines ke DB
             )
         except Exception as e:
             print(f"[DB WARNING] {e}")
 
 
-def _strip_raw_lines(results):
-    """Remove raw_lines from results before returning to save bandwidth on folder validation.
-    raw_lines is only needed for upload (where we have the file content fresh)."""
-    for r in results:
-        r.pop("raw_lines", None)
-    return results
+
 
 
 async def _run_smart(file_type: str, folder: str, filename: Optional[str]) -> list[dict]:
@@ -129,13 +125,13 @@ async def _run_smart(file_type: str, folder: str, filename: Optional[str]) -> li
 async def validate_inbox_price(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
     results = await _run_smart("price", "inbox", filename or None)
     _save_to_db(results, "price", user["email"], "inbox", via="Postman / API")
-    return _build_response(_strip_raw_lines(results))
+    return _build_response(results)
 
 @router.post("/error/price")
 async def validate_error_price(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
     results = await _run_smart("price", "error", filename or None)
     _save_to_db(results, "price", user["email"], "error", via="Postman / API")
-    return _build_response(_strip_raw_lines(results))
+    return _build_response(results)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -145,13 +141,13 @@ async def validate_error_price(filename: Optional[str] = Form(None), user=Depend
 async def validate_inbox_inventory(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
     results = await _run_smart("inventory", "inbox", filename or None)
     _save_to_db(results, "inventory", user["email"], "inbox", via="Postman / API")
-    return _build_response(_strip_raw_lines(results))
+    return _build_response(results)
 
 @router.post("/error/inventory")
 async def validate_error_inventory(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
     results = await _run_smart("inventory", "error", filename or None)
     _save_to_db(results, "inventory", user["email"], "error", via="Postman / API")
-    return _build_response(_strip_raw_lines(results))
+    return _build_response(results)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -161,13 +157,13 @@ async def validate_error_inventory(filename: Optional[str] = Form(None), user=De
 async def validate_inbox_master(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
     results = await _run_smart("master", "inbox", filename or None)
     _save_to_db(results, "master", user["email"], "inbox", via="Postman / API")
-    return _build_response(_strip_raw_lines(results))
+    return _build_response(results)
 
 @router.post("/error/master-product")
 async def validate_error_master(filename: Optional[str] = Form(None), user=Depends(get_current_user)):
     results = await _run_smart("master", "error", filename or None)
     _save_to_db(results, "master", user["email"], "error", via="Postman / API")
-    return _build_response(_strip_raw_lines(results))
+    return _build_response(results)
 
 
 # ══════════════════════════════════════════════════════════════
