@@ -34,6 +34,26 @@ def _safe_query(fn):
         return None
 
 
+
+
+def check_filename_exists(filename: str, file_type: str) -> bool:
+    """
+    Cek apakah nama file sudah pernah divalidasi sebelumnya
+    untuk kategori yang sama (price / inventory / master).
+    Return True jika sudah ada (duplikat), False jika belum.
+    """
+    def _fn(conn):
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM file_validations WHERE filename = %s AND file_type = %s",
+            (filename, file_type)
+        )
+        count = cursor.fetchone()[0]
+        cursor.close()
+        return count > 0
+    result = _safe_query(_fn)
+    return result if result is not None else False
+
 def save_validation_result(
     filename: str,
     file_type: str,
