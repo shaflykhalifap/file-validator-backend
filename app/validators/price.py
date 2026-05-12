@@ -89,33 +89,8 @@ def validate_price_file(filepath: Path) -> dict:
         return {"valid": False, "total_rows": 0,
                 "errors": [{"row": None, "column": None, "message": "File kosong."}]}
 
-    # 2. Validasi header — TIDAK berhenti meski header salah
-    header_line = lines[0]
-
-    # Deteksi apakah header pakai tab atau tidak
-    if "\t" not in header_line and len(PRICE_HEADERS) > 1:
-        errors.append({"row": 1, "column": None,
-                        "message": "Pemisah antar kolom pada baris header bukan Tab. Pastikan menggunakan karakter Tab (bukan spasi) untuk memisahkan kolom."})
-        # Coba split dengan spasi sebagai fallback untuk tetap validasi isi
-        headers = [h.strip() for h in header_line.split("  ") if h.strip()]
-    else:
-        headers = header_line.split("\t")
-
-    headers_stripped = [h.strip() for h in headers]
-
-    if headers_stripped != PRICE_HEADERS:
-        header_errors = _analyze_header_errors(headers, PRICE_HEADERS, 1)
-        errors.extend(header_errors)
-        header_valid = False
-    else:
-        header_valid = True
-        # Cek trailing space di header yang benar
-        for i, h in enumerate(headers):
-            if h != h.strip():
-                errors.append({"row": 1, "column": PRICE_HEADERS[i],
-                                "message": f"Header kolom '{PRICE_HEADERS[i]}' mengandung spasi di awal atau akhir."})
-
-    # 3. Validasi isi — SELALU dijalankan meskipun header salah
+    # 2. Header tidak divalidasi untuk price
+    # Langsung validasi isi mulai dari baris ke-2
     data_lines = lines[1:]
     for line_idx, line in enumerate(data_lines):
         row_num = line_idx + 2

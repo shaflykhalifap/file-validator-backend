@@ -82,28 +82,7 @@ def validate_master_file(filepath: Path) -> dict:
         return {"valid": False, "total_rows": 0,
                 "errors": [{"row": None, "column": None, "message": "File kosong."}]}
 
-    # 2. Validasi header — TIDAK berhenti meski salah
-    header_line = lines[0]
-
-    if "\t" not in header_line and len(MASTER_HEADERS) > 1:
-        errors.append({"row": 1, "column": None,
-                        "message": "Pemisah antar kolom pada baris header bukan Tab."})
-        headers = [h.strip() for h in header_line.split("  ") if h.strip()]
-    else:
-        headers = header_line.split("\t")
-
-    headers_stripped = [h.strip() for h in headers]
-
-    if headers_stripped != MASTER_HEADERS:
-        header_errors = _analyze_header_errors(headers, MASTER_HEADERS, 1)
-        errors.extend(header_errors)
-    else:
-        for i, h in enumerate(headers):
-            if h != h.strip():
-                errors.append({"row": 1, "column": MASTER_HEADERS[i],
-                                "message": f"Header kolom '{MASTER_HEADERS[i]}' mengandung spasi di awal atau akhir."})
-
-    # 3. Validasi isi — SELALU dijalankan
+    # 2. Header tidak divalidasi untuk master product
     data_lines = lines[1:]
     for line_idx, line in enumerate(data_lines):
         row_num = line_idx + 2
@@ -212,8 +191,11 @@ def validate_master_file(filepath: Path) -> dict:
             errors.append({"row": row_num, "column": "UPC",
                             "message": "Kolom UPC tidak boleh kosong."})
 
-        # Cek kolom wajib tidak kosong (12 kolom pertama)
-        required_cols = MASTER_HEADERS[:12]
+        # Cek kolom wajib tidak kosong
+        # SPU (kolom 2), YEAR (kolom 9), SEASON (kolom 10) BOLEH kosong
+        NULLABLE_COLS = {"PARENT/GENERIC/SPU", "YEAR", "SEASON"}
+        required_cols = [c for c in MASTER_HEADERS[:CONSUMED_COLUMNS]
+                         if c not in NULLABLE_COLS]
         for col_name in required_cols:
             if not col_map[col_name].strip():
                 errors.append({"row": row_num, "column": col_name,
