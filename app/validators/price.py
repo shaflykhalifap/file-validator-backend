@@ -1,80 +1,25 @@
+"""
+Price File Validator
+- Tidak memvalidasi header sama sekali
+- Mendukung 2 format:
+  V1: PARENT / GENERIC / SPU | LEGAL ENTITY CODE | ARTICLE NUMBER / VARIANT / SKU | LIST PRICE | CURRENT PRICE
+  V2: GENERIC | LEGAL ENTITY | ARTICLE NO | LIST PRICE | CURRENT PRICE
+- Legal Entity Code TIDAK divalidasi
+- Pencarian kustom: kolom pertama (index 0)
+"""
+import re
 from pathlib import Path
 from typing import Optional
 from app.core.config import settings
 
-PRICE_HEADERS = [
-    "PARENT / GENERIC / SPU",
-    "LEGAL ENTITY CODE",
-    "ARTICLE NUMBER / VARIANT / SKU",
-    "LIST PRICE",
-    "CURRENT PRICE",
-]
-
-# ── Helper: analisis perbedaan header per kolom ──────────────
-
-def _normalize_spaces(s: str) -> str:
-    import re as _re
-    return _re.sub(r' +', ' ', s.strip())
-
-
-def _analyze_header_errors(found: list[str], expected: list[str], row: int) -> list[dict]:
-    """
-    Bandingkan header kolom per kolom — deteksi nama salah, spasi berlebih/kurang, dll.
-    """
-    errors = []
-
-    if len(found) != len(expected):
-        errors.append({
-            "row": row, "column": None,
-            "message": (
-                f"Jumlah kolom header tidak sesuai. "
-                f"Ditemukan {len(found)} kolom, seharusnya {len(expected)} kolom. "
-                f"Kemungkinan penyebab: ada kolom yang hilang, atau pemisah header bukan Tab."
-            )
-        })
-        check_count = min(len(found), len(expected))
-    else:
-        check_count = len(expected)
-
-    for i in range(check_count):
-        f = found[i]
-        e = expected[i]
-        f_stripped = f.strip()
-
-        if f_stripped == e:
-            if f != f_stripped:
-                errors.append({
-                    "row": row, "column": f"Kolom {i+1}",
-                    "message": f"Header kolom {i+1} (\'{e}\') mengandung spasi di awal atau akhir."
-                })
-        else:
-            f_norm = _normalize_spaces(f_stripped)
-            e_norm = _normalize_spaces(e)
-
-            if f_norm == e_norm:
-                # Nama sama setelah normalisasi → masalah jumlah spasi dalam nama
-                errors.append({
-                    "row": row, "column": f"Kolom {i+1}",
-                    "message": (
-                        f"Nama header kolom {i+1} memiliki spasi yang tidak tepat. "
-                        f"Ditemukan: \'{f_stripped}\' | Seharusnya: \'{e}\' "
-                        f"(periksa jumlah spasi antar kata, termasuk di sekitar karakter \'/')"
-                    )
-                })
-            else:
-                errors.append({
-                    "row": row, "column": f"Kolom {i+1}",
-                    "message": f"Nama header kolom {i+1} salah. Ditemukan: \'{f_stripped}\' | Seharusnya: \'{e}\'"
-                })
-
-    return errors
+EXPECTED_COLS = 5
+DECIMAL_COLS  = {3, 4}
 
 
 def validate_price_file(filepath: Path) -> dict:
     errors = []
     raw = filepath.read_bytes()
 
-    # 1. Trailing newline
     if not raw.endswith(b"\n"):
         errors.append({"row": None, "column": None,
                         "message": "File tidak diakhiri dengan 1 baris kosong (enter) di bagian paling bawah."})
@@ -82,16 +27,23 @@ def validate_price_file(filepath: Path) -> dict:
         errors.append({"row": None, "column": None,
                         "message": "File memiliki lebih dari 1 baris kosong di bagian paling bawah."})
 
-    content = raw.decode("utf-8", errors="replace")
-    lines = content.splitlines()
+    text  = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
 
     if not lines:
         return {"valid": False, "total_rows": 0,
-                "errors": [{"row": None, "column": None, "message": "File kosong."}]}
+                "errors": [{"row": None, "column": None, "message": "File kosong."}],
+                "raw_lines": []}
 
-    # 2. Header tidak divalidasi untuk price
-    # Langsung validasi isi mulai dari baris ke-2
+    # Baca header untuk label kolom saja — TIDAK divalidasi
+    header_line = lines[0]
+    if "\t" in header_line:
+        header_cols = [h.strip() for h in header_line.split("\t")]
+    else:
+        header_cols = [h.strip() for h in re.split(r'  +', header_line) if h.strip()]
+
     data_lines = lines[1:]
+
     for line_idx, line in enumerate(data_lines):
         row_num = line_idx + 2
 
@@ -101,66 +53,52 @@ def validate_price_file(filepath: Path) -> dict:
                                 "message": "Baris kosong ditemukan di tengah file."})
             continue
 
-        # Deteksi pemisah
         if "\t" not in line:
             errors.append({"row": row_num, "column": None,
                             "message": (
                                 f"Baris {row_num} tidak menggunakan Tab sebagai pemisah kolom. "
-                                f"Periksa pemisah antara setiap nilai pada baris ini."
+                                f"Periksa pemisah antara setiap nilai — pastikan bukan spasi biasa."
                             )})
             continue
 
         cols = line.split("\t")
 
-        if len(cols) != 5:
-            # Beri konteks mengapa jumlah kolom salah
+        if len(cols) != EXPECTED_COLS:
             found_vals = " | ".join(f"'{c}'" for c in cols[:6])
-            errors.append({
-                "row": row_num, "column": None,
-                "message": (
-                    f"Jumlah kolom tidak sesuai pada baris {row_num}. "
-                    f"Ditemukan {len(cols)} kolom, seharusnya 5. "
-                    f"Nilai yang ditemukan: {found_vals}. "
-                    f"Kemungkinan: ada kolom yang hilang atau pemisah bukan Tab."
-                )
-            })
+            errors.append({"row": row_num, "column": None,
+                            "message": (
+                                f"Jumlah kolom tidak sesuai pada baris {row_num}. "
+                                f"Ditemukan {len(cols)} kolom, seharusnya {EXPECTED_COLS}. "
+                                f"Nilai ditemukan: {found_vals}. "
+                                f"Kemungkinan: ada kolom yang hilang atau pemisah bukan Tab."
+                            )})
             continue
 
-        spu, legal, sku, list_price, curr_price = cols
-        col_map = {
-            "PARENT / GENERIC / SPU": spu,
-            "LEGAL ENTITY CODE": legal,
-            "ARTICLE NUMBER / VARIANT / SKU": sku,
-            "LIST PRICE": list_price,
-            "CURRENT PRICE": curr_price,
-        }
-
-        for col_name, val in col_map.items():
+        for idx, val in enumerate(cols):
+            col_label = header_cols[idx] if idx < len(header_cols) else f"Kolom {idx + 1}"
             if val != val.rstrip():
-                errors.append({"row": row_num, "column": col_name,
+                errors.append({"row": row_num, "column": col_label,
                                 "message": f"Terdapat spasi di akhir cell. Nilai: '{val}'"})
             if val != val.lstrip():
-                errors.append({"row": row_num, "column": col_name,
+                errors.append({"row": row_num, "column": col_label,
                                 "message": f"Terdapat spasi di awal cell. Nilai: '{val}'"})
 
-        legal_clean = legal.strip()
-        if not (legal_clean.isdigit() and len(legal_clean) == 4):
-            errors.append({"row": row_num, "column": "LEGAL ENTITY CODE",
-                            "message": f"LEGAL ENTITY CODE harus tepat 4 digit angka. Nilai: '{legal_clean}'"})
+        for idx in DECIMAL_COLS:
+            if idx < len(cols):
+                col_label = header_cols[idx] if idx < len(header_cols) else f"Kolom {idx + 1}"
+                v = cols[idx].strip()
+                if "," in v:
+                    errors.append({"row": row_num, "column": col_label,
+                                    "message": f"{col_label} menggunakan koma sebagai desimal, seharusnya titik. Nilai: '{v}'"})
+                elif v:
+                    try:
+                        float(v)
+                    except ValueError:
+                        errors.append({"row": row_num, "column": col_label,
+                                        "message": f"{col_label} bukan angka valid. Nilai: '{v}'"})
 
-        for col_name, val_raw in [("LIST PRICE", list_price), ("CURRENT PRICE", curr_price)]:
-            v = val_raw.strip()
-            if "," in v:
-                errors.append({"row": row_num, "column": col_name,
-                                "message": f"{col_name} menggunakan koma sebagai desimal, seharusnya titik. Nilai: '{v}'"})
-            else:
-                try:
-                    float(v)
-                except ValueError:
-                    errors.append({"row": row_num, "column": col_name,
-                                    "message": f"{col_name} bukan angka valid. Nilai: '{v}'"})
-
-    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors, "raw_lines": lines}
+    return {"valid": len(errors) == 0, "total_rows": len(data_lines),
+            "errors": errors, "raw_lines": lines}
 
 
 def run_price_validation(folder: str, filename: Optional[str] = None) -> list[dict]:

@@ -1,89 +1,47 @@
+"""
+Inventory File Validator
+- Tidak memvalidasi header sama sekali
+- Mendukung 2 format:
+  V1: Warehouse | ItemNumber | BalanceApproved | Modified_dt
+  V2: StoreCode | SKU        | qty             | modified_dt
+- Warning jika Modified_dt > 14 hari dari tanggal di nama file
+- Pencarian kustom: kolom kedua (index 1)
+"""
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from app.core.config import settings
 
+DATE_PATTERN  = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+EXPECTED_COLS = 4
+
 
 def _extract_date_from_filename(filename: str) -> datetime | None:
-    """
-    Ekstrak tanggal dari nama file inventory.
-    Format akhiran: YYYYMMDDHHMMSS
-    Contoh: MAP_Inv_TL00_20260505200301.txt → 2026-05-05
-    """
-    # Cari pola 14 digit angka di akhir nama file (sebelum .txt)
-    stem = filename.replace('.txt', '').replace('.TXT', '')
-    match = re.search(r'(\d{14})$', stem)
-    if match:
-        ts = match.group(1)
+    """Ekstrak tanggal dari nama file. Contoh: MAP_IAB_EY02_20251107170125.txt -> 2025-11-07"""
+    stem = re.sub(r'\.(txt|TXT)$', '', filename)
+    # Cari 14 digit di akhir nama file
+    m = re.search(r'(\d{14})$', stem)
+    if m:
         try:
-            return datetime.strptime(ts, '%Y%m%d%H%M%S')
+            return datetime.strptime(m.group(1), '%Y%m%d%H%M%S')
         except ValueError:
             pass
-    # Fallback: cari 8 digit tanggal saja
-    match8 = re.search(r'(\d{8})', stem)
-    if match8:
+    # Fallback: 8 digit tanggal
+    m8 = re.search(r'(\d{8})', stem)
+    if m8:
         try:
-            return datetime.strptime(match8.group(1), '%Y%m%d')
+            return datetime.strptime(m8.group(1), '%Y%m%d')
         except ValueError:
             pass
     return None
 
-INVENTORY_HEADERS = ["Warehouse", "ItemNumber", "BalanceApproved", "Modified_dt"]
-DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _analyze_header_errors(found: list[str], expected: list[str], row: int) -> list[dict]:
-    errors = []
-    if len(found) != len(expected):
-        errors.append({
-            "row": row, "column": None,
-            "message": (
-                f"Jumlah kolom header tidak sesuai. "
-                f"Ditemukan {len(found)} kolom, seharusnya {len(expected)} kolom. "
-                f"Kemungkinan penyebab: ada kolom yang hilang atau pemisah header bukan Tab."
-            )
-        })
-    check_count = min(len(found), len(expected))
-    for i in range(check_count):
-        f = found[i]
-        e = expected[i]
-        f_stripped = f.strip()
-        if f_stripped == e:
-            if f != f_stripped:
-                errors.append({"row": row, "column": f"Kolom {i+1}",
-                                "message": f"Header kolom {i+1} ('{e}') mengandung spasi di awal atau akhir."})
-        else:
-            if f_stripped.lower() == e.lower():
-                errors.append({
-                    "row": row, "column": f"Kolom {i+1}",
-                    "message": (
-                        f"Nama header kolom {i+1} tidak sesuai kapitalisasi (case-sensitive). "
-                        f"Ditemukan: '{f_stripped}' | Seharusnya: '{e}' "
-                        f"(perhatikan camelCase — huruf kapital di setiap kata)"
-                    )
-                })
-            elif f_stripped.replace(" ", "") == e.replace(" ", ""):
-                errors.append({
-                    "row": row, "column": f"Kolom {i+1}",
-                    "message": (
-                        f"Header kolom {i+1} kemungkinan menggunakan spasi alih-alih Tab sebagai pemisah. "
-                        f"Ditemukan: '{f_stripped}' | Seharusnya: '{e}'"
-                    )
-                })
-            else:
-                errors.append({
-                    "row": row, "column": f"Kolom {i+1}",
-                    "message": f"Nama header kolom {i+1} salah. Ditemukan: '{f_stripped}' | Seharusnya: '{e}'"
-                })
-    return errors
-
 
 def validate_inventory_file(filepath: Path, filename: str = "") -> dict:
     errors = []
-    raw = filepath.read_bytes()
+    fname  = filename or filepath.name
+    raw    = filepath.read_bytes()
 
-    # 1. Trailing newline
     if not raw.endswith(b"\n"):
         errors.append({"row": None, "column": None,
                         "message": "File tidak diakhiri dengan 1 baris kosong (enter) di bagian paling bawah."})
@@ -91,32 +49,39 @@ def validate_inventory_file(filepath: Path, filename: str = "") -> dict:
         errors.append({"row": None, "column": None,
                         "message": "File memiliki lebih dari 1 baris kosong di bagian paling bawah."})
 
-    content = raw.decode("utf-8", errors="replace")
-    lines = content.splitlines()
+    text  = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
 
     if not lines:
         return {"valid": False, "total_rows": 0,
-                "errors": [{"row": None, "column": None, "message": "File kosong."}]}
+                "errors": [{"row": None, "column": None, "message": "File kosong."}],
+                "raw_lines": [], "header_version": "unknown", "header_cols": []}
 
-    # 2. Header tidak divalidasi untuk inventory
-    # Dua format header yang valid:
-    # V1: Warehouse, ItemNumber, BalanceApproved, Modified_dt
-    # V2: StoreCode, SKU, qty, modified_dt
-    # Deteksi format dari baris header untuk keperluan info saja
+    # Baca header untuk label kolom saja — TIDAK divalidasi apapun
     header_line = lines[0]
-    header_cols = [h.strip() for h in header_line.split("\t")]
-    # Deteksi versi header (untuk dipass ke result)
-    if any(h.lower() == 'sku' for h in header_cols):
-        header_version = 'v2'  # StoreCode, SKU, qty, modified_dt
-        date_col_name  = 'modified_dt'
-        date_col_idx   = next((i for i, h in enumerate(header_cols) if h.lower() == 'modified_dt'), 3)
+    if "\t" in header_line:
+        header_cols = [h.strip() for h in header_line.split("\t")]
     else:
-        header_version = 'v1'  # Warehouse, ItemNumber, BalanceApproved, Modified_dt
-        date_col_name  = 'Modified_dt'
-        date_col_idx   = next((i for i, h in enumerate(header_cols) if h.lower() == 'modified_dt'), 3)
+        # Header pakai spasi bukan tab — tetap baca untuk label, tidak error
+        header_cols = [h.strip() for h in re.split(r'  +', header_line) if h.strip()]
 
-    # 3. Validasi isi — SELALU dijalankan
+    # Deteksi versi: kolom ke-2 (index 1)
+    header_lower = [h.lower() for h in header_cols]
+    if len(header_lower) > 1 and header_lower[1] == 'sku':
+        header_version = 'v2'
+    else:
+        header_version = 'v1'
+
+    # Kolom tanggal selalu di index 3
+    date_col_idx   = 3
+    date_col_label = header_cols[3] if len(header_cols) > 3 else 'Modified_dt'
+
+    # Ekstrak tanggal dari nama file untuk warn 14 hari
+    file_date = _extract_date_from_filename(fname)
+
+    # Validasi isi — mulai dari baris ke-2 (index 1)
     data_lines = lines[1:]
+
     for line_idx, line in enumerate(data_lines):
         row_num = line_idx + 2
 
@@ -126,34 +91,30 @@ def validate_inventory_file(filepath: Path, filename: str = "") -> dict:
                                 "message": "Baris kosong ditemukan di tengah file."})
             continue
 
+        # Cek tab di baris DATA (bukan header)
         if "\t" not in line:
-            errors.append({
-                "row": row_num, "column": None,
-                "message": (
-                    f"Baris {row_num} tidak menggunakan Tab sebagai pemisah kolom. "
-                    f"Periksa pemisah antara setiap nilai — pastikan bukan spasi biasa."
-                )
-            })
+            errors.append({"row": row_num, "column": None,
+                            "message": (
+                                f"Baris {row_num} tidak menggunakan Tab sebagai pemisah kolom. "
+                                f"Periksa pemisah antara setiap nilai — pastikan bukan spasi biasa."
+                            )})
             continue
 
         cols = line.split("\t")
 
-        if len(cols) != 4:
+        if len(cols) != EXPECTED_COLS:
             found_vals = " | ".join(f"'{c}'" for c in cols[:5])
-            errors.append({
-                "row": row_num, "column": None,
-                "message": (
-                    f"Jumlah kolom tidak sesuai pada baris {row_num}. "
-                    f"Ditemukan {len(cols)} kolom, seharusnya 4. "
-                    f"Nilai yang ditemukan: {found_vals}. "
-                    f"Kemungkinan: ada kolom yang hilang atau pemisah antar nilai bukan Tab."
-                )
-            })
+            errors.append({"row": row_num, "column": None,
+                            "message": (
+                                f"Jumlah kolom tidak sesuai pada baris {row_num}. "
+                                f"Ditemukan {len(cols)} kolom, seharusnya {EXPECTED_COLS}. "
+                                f"Nilai ditemukan: {found_vals}."
+                            )})
             continue
 
-        # Validasi spasi di semua kolom (gunakan nama dari header asli jika ada)
+        # Cek spasi tersembunyi
         for idx, val in enumerate(cols):
-            col_label = header_cols[idx] if idx < len(header_cols) else f"Kolom {idx+1}"
+            col_label = header_cols[idx] if idx < len(header_cols) else f"Kolom {idx + 1}"
             if val != val.rstrip():
                 errors.append({"row": row_num, "column": col_label,
                                 "message": f"Terdapat spasi di akhir cell. Nilai: '{val}'"})
@@ -161,34 +122,39 @@ def validate_inventory_file(filepath: Path, filename: str = "") -> dict:
                 errors.append({"row": row_num, "column": col_label,
                                 "message": f"Terdapat spasi di awal cell. Nilai: '{val}'"})
 
-        # Ambil kolom tanggal berdasarkan posisi yang terdeteksi
-        modified_dt = cols[date_col_idx] if date_col_idx < len(cols) else ''
-        dt_clean = modified_dt.strip()
-        if not DATE_PATTERN.match(dt_clean):
-            errors.append({"row": row_num, "column": "Modified_dt",
-                            "message": (
-                                f"Format tanggal tidak valid, harus YYYY-MM-DD. "
-                                f"Nilai: '{dt_clean}'. "
-                                f"Contoh yang benar: 2025-01-08"
-                            )})
-        else:
-            try:
-                row_date = datetime.strptime(dt_clean, "%Y-%m-%d")
-            except ValueError:
-                errors.append({"row": row_num, "column": "Modified_dt",
-                                "message": f"Tanggal tidak valid (bulan/hari di luar range). Nilai: '{dt_clean}'"})
-                row_date = None
+        # Cek kolom balance/qty (index 2) harus integer
+        if len(cols) > 2:
+            bal_label = header_cols[2] if len(header_cols) > 2 else "Kolom 3"
+            bal_clean = cols[2].strip()
+            if bal_clean and not bal_clean.lstrip("-").isdigit():
+                errors.append({"row": row_num, "column": bal_label,
+                                "message": f"{bal_label} harus berupa angka bulat. Nilai: '{bal_clean}'"})
 
-            # Validasi: Modified_dt tidak boleh lebih dari 14 hari
-            # sebelum tanggal di nama file
-            if row_date is not None:
-                file_date = _extract_date_from_filename(filename or filepath.name)
-                if file_date is not None:
+        # Validasi tanggal di kolom ke-4 (index 3)
+        if date_col_idx < len(cols):
+            dt_clean = cols[date_col_idx].strip()
+
+            if not DATE_PATTERN.match(dt_clean):
+                errors.append({"row": row_num, "column": date_col_label,
+                                "message": (
+                                    f"Format tanggal tidak valid, harus YYYY-MM-DD. "
+                                    f"Nilai: '{dt_clean}'. Contoh yang benar: 2025-01-08"
+                                )})
+            else:
+                try:
+                    row_date = datetime.strptime(dt_clean, "%Y-%m-%d")
+                except ValueError:
+                    errors.append({"row": row_num, "column": date_col_label,
+                                   "message": f"Tanggal tidak valid (bulan/hari di luar range). Nilai: '{dt_clean}'"})
+                    row_date = None
+
+                # WARN jika Modified_dt lebih dari 14 hari sebelum tanggal file
+                if row_date is not None and file_date is not None:
                     selisih = (file_date.date() - row_date.date()).days
                     if selisih > 14:
                         errors.append({
                             "row": row_num,
-                            "column": "Modified_dt",
+                            "column": date_col_label,
                             "message": (
                                 f"[WARN] Modified_dt lebih dari 14 hari dari tanggal file. "
                                 f"Tanggal file: {file_date.strftime('%Y-%m-%d')} | "
@@ -199,15 +165,15 @@ def validate_inventory_file(filepath: Path, filename: str = "") -> dict:
                             "level": "warn"
                         })
 
-        # Validasi kolom balance/qty (kolom ke-3, index 2) harus bilangan bulat
-        if len(cols) > 2:
-            bal_label = header_cols[2] if len(header_cols) > 2 else 'Kolom 3'
-            bal_clean = cols[2].strip()
-            if not bal_clean.lstrip("-").isdigit():
-                errors.append({"row": row_num, "column": bal_label,
-                                "message": f"{bal_label} harus berupa angka bulat. Nilai: '{bal_clean}'"})
-
-    return {"valid": len(errors) == 0, "total_rows": len(data_lines), "errors": errors, "raw_lines": lines, "header_version": header_version, "header_cols": header_cols}
+    real_errors = [e for e in errors if e.get("level") != "warn"]
+    return {
+        "valid": len(real_errors) == 0,
+        "total_rows": len(data_lines),
+        "errors": errors,
+        "raw_lines": lines,
+        "header_version": header_version,
+        "header_cols": header_cols,
+    }
 
 
 def run_inventory_validation(folder: str, filename: Optional[str] = None) -> list[dict]:
