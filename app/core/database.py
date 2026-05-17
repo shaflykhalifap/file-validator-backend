@@ -1,10 +1,14 @@
 """
-Database connection ke MySQL.
+Database connection dan fungsi CRUD untuk FileValidator.
+Auto-limit 150 riwayat per file_type. Saat insert dan sudah >= 150,
+hapus yang paling lama otomatis.
 """
 import json
 import mysql.connector
 from datetime import datetime
 from app.core.config import settings
+
+MAX_LOGS_PER_TYPE = 150
 
 
 def get_connection():
@@ -34,14 +38,8 @@ def _safe_query(fn):
         return None
 
 
-
-
 def check_filename_exists(filename: str, file_type: str) -> bool:
-    """
-    Cek apakah nama file sudah pernah divalidasi sebelumnya
-    untuk kategori yang sama (price / inventory / master).
-    Return True jika sudah ada (duplikat), False jika belum.
-    """
+    """Cek apakah nama file sudah pernah divalidasi di kategori yang sama."""
     def _fn(conn):
         cursor = conn.cursor()
         cursor.execute(
@@ -54,6 +52,33 @@ def check_filename_exists(filename: str, file_type: str) -> bool:
     result = _safe_query(_fn)
     return result if result is not None else False
 
+
+def _enforce_limit(conn, file_type: str):
+    """
+    Pastikan jumlah riwayat per file_type tidak melebihi MAX_LOGS_PER_TYPE.
+    Jika sudah >= 150, hapus yang paling lama sejumlah kelebihan + 1 slot baru.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM file_validations WHERE file_type = %s",
+        (file_type,)
+    )
+    count = cursor.fetchone()[0]
+    if count >= MAX_LOGS_PER_TYPE:
+        to_delete = count - MAX_LOGS_PER_TYPE + 1
+        cursor.execute(
+            """
+            DELETE FROM file_validations
+            WHERE file_type = %s
+            ORDER BY validated_at ASC
+            LIMIT %s
+            """,
+            (file_type, to_delete)
+        )
+        print(f"[DB] Auto-deleted {to_delete} old log(s) for {file_type}")
+    cursor.close()
+
+
 def save_validation_result(
     filename: str,
     file_type: str,
@@ -64,9 +89,10 @@ def save_validation_result(
     total_errors: int,
     error_details: list,
     notes: str = None,
-    raw_lines: list = None,      # ← baru: baris asli file
+    raw_lines: list = None,
 ) -> int:
     def _fn(conn):
+        _enforce_limit(conn, file_type)
         cursor = conn.cursor()
         raw_lines_json = json.dumps(raw_lines, ensure_ascii=False) if raw_lines else None
         cursor.execute(
@@ -78,8 +104,8 @@ def save_validation_result(
             """,
             (filename, file_type, source, validated_by, datetime.now(),
              status, total_rows, total_errors,
-             json.dumps(error_details, ensure_ascii=False), notes,
-             raw_lines_json)
+             json.dumps(error_details, ensure_ascii=False),
+             notes, raw_lines_json)
         )
         new_id = cursor.lastrowid
         cursor.close()
@@ -91,9 +117,9 @@ def get_validation_logs(
     file_type: str = None,
     source: str = None,
     status: str = None,
-    limit: int = 100,
+    limit: int = 150,
     offset: int = 0,
-) -> list[dict]:
+) -> list:
     def _fn(conn):
         cursor = conn.cursor(dictionary=True)
         conditions, params = [], []
@@ -104,9 +130,10 @@ def get_validation_logs(
         if status:
             conditions.append("status = %s"); params.append(status)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        safe_limit = min(limit, MAX_LOGS_PER_TYPE)
         cursor.execute(
             f"SELECT * FROM file_validations {where} ORDER BY validated_at DESC LIMIT %s OFFSET %s",
-            params + [limit, offset]
+            params + [safe_limit, offset]
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -116,7 +143,6 @@ def get_validation_logs(
                     row["error_details"] = json.loads(row["error_details"])
                 except Exception:
                     row["error_details"] = []
-            # Parse raw_lines
             if row.get("raw_lines"):
                 try:
                     row["raw_lines"] = json.loads(row["raw_lines"])
