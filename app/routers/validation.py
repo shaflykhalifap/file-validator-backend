@@ -230,7 +230,13 @@ async def _handle_upload(file: UploadFile, validator_fn) -> dict:
         tmp.write(contents)
         tmp_path = Path(tmp.name)
     try:
-        result = validator_fn(tmp_path)
+        import inspect
+        # Pass filename asli ke validator jika didukung (inventory butuh untuk warn 14 hari)
+        sig = inspect.signature(validator_fn)
+        if "filename" in sig.parameters:
+            result = validator_fn(tmp_path, filename=file.filename)
+        else:
+            result = validator_fn(tmp_path)
         result["file"] = file.filename
         result["folder"] = "upload"
         return _build_response([result])
