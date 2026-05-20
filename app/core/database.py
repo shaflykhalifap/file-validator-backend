@@ -131,8 +131,15 @@ def get_validation_logs(
             conditions.append("status = %s"); params.append(status)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         safe_limit = min(limit, MAX_LOGS_PER_TYPE)
+        # Sengaja tidak mengambil raw_lines di sini untuk performa
+        # raw_lines bisa sangat besar (ribuan baris × 16 kolom master product)
+        # Diambil terpisah per baris saat user klik tombol Kustom
         cursor.execute(
-            f"SELECT * FROM file_validations {where} ORDER BY validated_at DESC LIMIT %s OFFSET %s",
+            f"""SELECT id, filename, file_type, source, validated_by,
+                       validated_at, status, total_rows, total_errors,
+                       error_details, notes
+                FROM file_validations {where}
+                ORDER BY validated_at DESC LIMIT %s OFFSET %s""",
             params + [safe_limit, offset]
         )
         rows = cursor.fetchall()
@@ -143,11 +150,8 @@ def get_validation_logs(
                     row["error_details"] = json.loads(row["error_details"])
                 except Exception:
                     row["error_details"] = []
-            if row.get("raw_lines"):
-                try:
-                    row["raw_lines"] = json.loads(row["raw_lines"])
-                except Exception:
-                    row["raw_lines"] = None
+            # raw_lines tidak diambil di query ini, set None sebagai default
+            row["raw_lines"] = None
             for key in ("validated_at", "created_at"):
                 if isinstance(row.get(key), datetime):
                     row[key] = row[key].isoformat()
@@ -155,6 +159,31 @@ def get_validation_logs(
     result = _safe_query(_fn)
     return result if result is not None else []
 
+
+
+
+def get_raw_lines_by_id(log_id: int) -> list | None:
+    """
+    Ambil raw_lines dari satu log validasi berdasarkan ID.
+    Dipanggil terpisah hanya saat user klik tombol Kustom
+    agar query riwayat tetap ringan.
+    """
+    def _fn(conn):
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT raw_lines FROM file_validations WHERE id = %s",
+            (log_id,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        if not row or not row.get("raw_lines"):
+            return None
+        try:
+            return json.loads(row["raw_lines"])
+        except Exception:
+            return None
+    result = _safe_query(_fn)
+    return result
 
 def get_validation_summary() -> dict:
     def _fn(conn):
