@@ -1,8 +1,8 @@
 """
 Master Product File Validator
 - Tidak memvalidasi header
-- Wajib tepat 16 kolom per baris (tab harus ada di kolom 15 dan 16)
-- Kolom 15 (DISCONTINUATION) dan 16 (CONCEPT) harus ada tapi nilainya kosong
+- Minimal 14 kolom per baris, padding otomatis ke 16 jika kurang
+- Kolom 15 (DISCONTINUATION) dan 16 (CONCEPT) harus kosong
 - Legal Entity Code tidak divalidasi formatnya
 - Kolom PARENT/GENERIC/SPU, YEAR, SEASON boleh kosong
 - SKU harus mengandung SPU (jika SPU tidak kosong)
@@ -27,11 +27,10 @@ MASTER_HEADERS = [
     "SBU CODE",                     # 11 — wajib diisi
     "LEGAL ENTITY CODE",            # 12 — wajib diisi, bebas format
     "MAIN UPC",                     # 13 — wajib diisi
-    "DISCONTINUATION",              # 14 — wajib ADA (tab harus ada), nilai wajib KOSONG
-    "CONCEPT",                      # 15 — wajib ADA (tab harus ada), nilai wajib KOSONG
+    "DISCONTINUATION",              # 14 — wajib KOSONG
+    "CONCEPT",                      # 15 — wajib KOSONG
 ]
-TOTAL_COLUMNS    = 16   # jumlah kolom wajib tepat 16
-CONSUMED_COLUMNS = 14   # kolom 0-13 yang dikonsumsi sistem
+CONSUMED_COLUMNS = 14
 NULLABLE_COLS    = {"PARENT/GENERIC/SPU", "YEAR", "SEASON"}
 
 
@@ -89,35 +88,26 @@ def validate_master_file(filepath: Path) -> dict:
 
         cols = line.split("\t")
 
-        # Cek jumlah kolom harus TEPAT 16
-        # Kolom 15 dan 16 (DISCONTINUATION & CONCEPT) wajib ada tab-nya
-        # meskipun nilainya kosong
-        if len(cols) != TOTAL_COLUMNS:
+        # Cek jumlah kolom minimal 14
+        if len(cols) < CONSUMED_COLUMNS:
             found_vals = " | ".join(f"'{c}'" for c in cols[:5])
-            if len(cols) < TOTAL_COLUMNS:
-                errors.append({
-                    "row": row_num, "column": None,
-                    "message": (
-                        f"Jumlah kolom tidak sesuai pada baris {row_num}. "
-                        f"Ditemukan {len(cols)} kolom, seharusnya tepat {TOTAL_COLUMNS}. "
-                        f"5 nilai pertama: {found_vals}. "
-                        f"Pastikan kolom DISCONTINUATION dan CONCEPT tetap ada "
-                        f"(meskipun kosong) dengan tab sebagai pemisah."
-                    )
-                })
-            else:
-                errors.append({
-                    "row": row_num, "column": None,
-                    "message": (
-                        f"Jumlah kolom tidak sesuai pada baris {row_num}. "
-                        f"Ditemukan {len(cols)} kolom, seharusnya tepat {TOTAL_COLUMNS}. "
-                        f"5 nilai pertama: {found_vals}. "
-                        f"Kemungkinan: ada kolom tambahan yang tidak seharusnya ada."
-                    )
-                })
+            errors.append({
+                "row": row_num, "column": None,
+                "message": (
+                    f"Jumlah kolom tidak sesuai pada baris {row_num}. "
+                    f"Ditemukan {len(cols)} kolom, seharusnya minimal {CONSUMED_COLUMNS}. "
+                    f"5 nilai pertama: {found_vals}. "
+                    f"Kemungkinan: ada kolom yang hilang atau pemisah bukan Tab."
+                )
+            })
             continue
 
-        # Cek kolom 15 & 16 harus KOSONG (tab ada tapi nilai kosong)
+        # Padding otomatis ke 16 kolom jika kurang
+        # (kolom 15 & 16 boleh tidak ada tab-nya, dianggap kosong)
+        while len(cols) < 16:
+            cols.append("")
+
+        # Cek kolom 15 & 16 harus kosong
         if cols[14].strip():
             errors.append({
                 "row": row_num, "column": "DISCONTINUATION",
@@ -135,7 +125,7 @@ def validate_master_file(filepath: Path) -> dict:
                 )
             })
 
-        col_map = {MASTER_HEADERS[i]: cols[i] for i in range(TOTAL_COLUMNS)}
+        col_map = {MASTER_HEADERS[i]: cols[i] for i in range(16)}
 
         # Cek spasi tersembunyi untuk 14 kolom consumed
         for col_name in MASTER_HEADERS[:CONSUMED_COLUMNS]:
@@ -152,7 +142,6 @@ def validate_master_file(filepath: Path) -> dict:
                 })
 
         # Cek kolom wajib tidak boleh kosong
-        # Semua 14 kolom consumed wajib diisi KECUALI yang ada di NULLABLE_COLS
         for col_name in MASTER_HEADERS[:CONSUMED_COLUMNS]:
             if col_name not in NULLABLE_COLS:
                 if not col_map[col_name].strip():
@@ -185,8 +174,6 @@ def validate_master_file(filepath: Path) -> dict:
                     f"UPC: '{upc}' | MAIN UPC: '{main_upc}'"
                 )
             })
-
-        # Legal Entity Code: wajib tidak kosong (sudah dicek di atas), bebas format
 
     return {
         "valid": len(errors) == 0,
