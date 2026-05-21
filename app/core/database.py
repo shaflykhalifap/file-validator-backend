@@ -6,6 +6,7 @@ hapus yang paling lama otomatis.
 import json
 import mysql.connector
 from datetime import datetime
+from typing import Optional, List
 from app.core.config import settings
 
 MAX_LOGS_PER_TYPE = 150
@@ -162,7 +163,7 @@ def get_validation_logs(
 
 
 
-def get_raw_lines_by_id(log_id: int) -> list | None:
+def get_raw_lines_by_id(log_id: int) -> Optional[List]:
     """
     Ambil raw_lines dari satu log validasi berdasarkan ID.
     Dipanggil terpisah hanya saat user klik tombol Kustom
