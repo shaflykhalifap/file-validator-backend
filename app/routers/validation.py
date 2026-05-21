@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.core.auth import get_current_user
 from app.core.config import settings
-from app.core.database import save_validation_result, get_validation_logs, get_validation_summary, check_filename_exists, get_raw_lines_by_id
+from app.core.database import save_validation_result, get_validation_logs, get_validation_summary, check_filename_exists
 from app.validators.price import run_price_validation, validate_price_file
 from app.validators.inventory import run_inventory_validation, validate_inventory_file
 from app.validators.master import run_master_validation, validate_master_file
@@ -270,25 +270,6 @@ async def list_files(file_type: str, folder: str, _=Depends(get_current_user)):
 # ══════════════════════════════════════════════════════════════
 #  LOGS & SUMMARY
 # ══════════════════════════════════════════════════════════════
-@router.get("/logs/{log_id}/raw_lines")
-async def get_log_raw_lines(
-    log_id: int,
-    _: dict = Depends(get_current_user)
-):
-    """
-    Ambil raw_lines dari satu log validasi berdasarkan ID.
-    Dipisah dari endpoint logs utama agar query riwayat tetap ringan.
-    Dipanggil frontend hanya saat user klik tombol Kustom.
-    """
-    try:
-        raw_lines = get_raw_lines_by_id(log_id)
-        if raw_lines is None:
-            return {"raw_lines": None, "message": "raw_lines tidak tersedia untuk log ini."}
-        return {"raw_lines": raw_lines}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/logs")
 async def get_logs(
     file_type: Optional[str] = None,
