@@ -29,7 +29,7 @@ async def login(
             "name":     user.get("name", user.get("email", "")),
             "email":    user.get("email", ""),
             "username": user.get("username", user.get("email", "")),
-            "role":     user.get("role", "user"),
+            "role":     user.get("role", "admin"),
         },
     }
 
@@ -41,5 +41,5 @@ async def me(current_user=Depends(get_current_user)):
         "name":     current_user.get("name", current_user.get("email", "")),
         "email":    current_user.get("email", ""),
         "username": current_user.get("username", current_user.get("email", "")),
-        "role":     current_user.get("role", "user"),
+        "role":     current_user.get("role", "admin"),
     }

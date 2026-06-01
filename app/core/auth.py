@@ -29,7 +29,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
         if "is_active" in user and not user["is_active"]:
             return None
         user.setdefault("username", user.get("email", ""))
-        user.setdefault("role", "user")
+        user.setdefault("role", "admin")
         user.setdefault("name", user.get("email", "unknown"))
         return user
     except Exception as e:
